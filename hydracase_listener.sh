@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# ==============================================================================
+#
+# hydracase_listener.sh ver1.0 by rbruzzon@redhat.com
+#
+# ==============================================================================
 
 # ==============================================================================
 # CONFIGURATION & CONSTANTS
@@ -16,12 +21,13 @@ LAST_SEEN_FILE="/tmp/hydracase_last_seen_${CURRENT_USER}.txt"
 # ------------------------------------------------------------------------------
 DEBUG_MODE=true                       # Set to 'true' for verbose execution logs
 SHOW_CREDENTIALS_DUMP=false           # Set to 'false' to hide raw TOKEN & COOKIE strings
+DUMP_RAW_MESSAGES=true                # Set to 'true' to dump raw Slack JSON messages
 # ------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
 # TEST MODE CONFIGURATION (For use with send_mock_event.sh)
 # ------------------------------------------------------------------------------
-TEST_MODE=false                       # Set to 'true' to enable testing, 'false' for production
+TEST_MODE=false                        # Set to 'true' to enable testing, 'false' for production
 TEST_USER_ID="U02P7NU7T8W"            # Personal Slack User ID for test message interception
 # ------------------------------------------------------------------------------
 
@@ -59,10 +65,9 @@ CONFIGURATION & SETUP GUIDE
        $ pip install browser-cookie3 --user
 
 2. DEBUG & CREDENTIAL LOGGING CONTROL:
-   - DEBUG_MODE=true|false             : Enables or disables general debug logging.
-   - SHOW_CREDENTIALS_DUMP=true|false  : Set to 'false' to hide raw TOKEN and COOKIE
-                                         dumps from terminal output while keeping
-                                         operational debug logs visible.
+   - DEBUG_MODE=true|false            : Enables or disables general debug logging.
+   - SHOW_CREDENTIALS_DUMP=true|false : Set to 'false' to hide raw TOKEN and COOKIE.
+   - DUMP_RAW_MESSAGES=true|false     : Set to 'true' to dump raw Slack JSON messages.
 
 3. TEST MODE CONFIGURATION:
    - TEST_MODE=true  : Listens for BOTH HydraCaseBot AND your TEST_USER_ID.
@@ -170,7 +175,7 @@ echo "[+] Starting HydraCaseBot Dynamic Listener"
 echo "[+] Active User   : ${CURRENT_USER}"
 echo "[+] Target Email  : ${TARGET_EMAIL}"
 echo "[+] Firefox Profile: ${FF_PROFILE_DIR}"
-echo "[+] Debug Mode    : ${DEBUG_MODE} (Show Dump: ${SHOW_CREDENTIALS_DUMP})"
+echo "[+] Debug Mode    : ${DEBUG_MODE} (Dump Credentials: ${SHOW_CREDENTIALS_DUMP} | Dump Raw MSG: ${DUMP_RAW_MESSAGES})"
 if [ "$TEST_MODE" = true ]; then
     echo -e "[\e[33mTEST MODE ENABLED\e[0m] Intercepting Bot ($BOT_USER_ID) AND Test User ($TEST_USER_ID)"
 fi
@@ -185,9 +190,6 @@ while true; do
     SLACK_USER_TOKEN=$(get_slack_token)
     SLACK_COOKIE_D=$(get_slack_cookie)
 
-    # --------------------------------------------------------------------------
-    # FULL CREDENTIALS DEBUG DUMP (CONDITIONAL)
-    # --------------------------------------------------------------------------
     if [ "$DEBUG_MODE" = true ] && [ "$SHOW_CREDENTIALS_DUMP" = true ]; then
         log_debug "=== FULL CREDENTIALS DUMP ==="
         log_debug "TOKEN (Len ${#SLACK_USER_TOKEN})  : ${SLACK_USER_TOKEN:-"NOT FOUND"}"
@@ -243,38 +245,86 @@ while true; do
             SENDER=$(echo "$msg" | jq -r '.user // "bot"')
             log_debug "Processing message TS: $TS ($HUMAN_TS) [Sender: $SENDER]"
 
+            if [ "$DEBUG_MODE" = true ] && [ "$DUMP_RAW_MESSAGES" = true ]; then
+                log_debug "=== RAW MESSAGE JSON DUMP ==="
+                log_debug "$(echo "$msg" | jq . 2>/dev/null || echo "$msg")"
+                log_debug "============================="
+            fi
+
             ATTACH_COUNT=$(echo "$msg" | jq '.attachments | length // 0')
 
             if [ "$ATTACH_COUNT" -gt 0 ]; then
                 for (( idx=0; idx<ATTACH_COUNT; idx++ )); do
                     ATT=$(echo "$msg" | jq -c ".attachments[$idx]")
 
-                    RAW_TEXT=$(echo "$ATT" | jq -r '
-                        if .text then .text
-                        elif .fallback then .fallback
-                        else (.blocks[]? | .text.text? // .elements[]?.text? // empty)
-                        end
-                    ')
+                    # 1. Estrazione del Customer avanzata via Python su TUTTO il blocco JSON (compresi i Blocks)
+                    CUSTOMER=$(python3 -c "
+import json, html, re, sys
 
-                    BODY_TEXT=$(echo "$RAW_TEXT" | sed \
-                        -e 's/\\n/\n/g' \
-                        -e 's/-&gt;/->/g' \
-                        -e 's/&gt;/>/g' \
-                        -e 's/&lt;/</g' \
-                        -e 's/&amp;/&/g' \
-                        -e 's/:briefcase:/💼/g' \
-                        -e 's/:building_construction:/🏗️/g' \
-                        -e 's/:bust_in_silhouette:/👤/g' \
-                        -e 's/:package:/📦/g' \
-                        -e 's/[*~]//g')
+try:
+    att = json.loads(sys.argv[1])
+    full_text = ''
+    
+    # Raccoglie testo da fallback, text e array di blocks
+    if 'text' in att: full_text += att['text'] + '\n'
+    if 'fallback' in att: full_text += att['fallback'] + '\n'
+    
+    for block in att.get('blocks', []):
+        if 'text' in block and isinstance(block['text'], dict):
+            full_text += block['text'].get('text', '') + '\n'
+        if 'fields' in block:
+            for f in block['fields']:
+                full_text += f.get('text', '') + '\n'
 
+    decoded = html.unescape(html.unescape(full_text))
+
+    match = re.search(r'(?::account:|:building_construction:|🏗️)\s*(.*?)\s*(?=:case_owner:|:product:|:package:|:bust_in_silhouette:|\t|\n|$)', decoded)
+    if match and match.group(1).strip():
+        print(match.group(1).strip())
+    else:
+        print('Red Hat Account')
+except Exception:
+    print('Red Hat Account')
+" "$ATT")
+
+                    # 2. Formattazione e Pulizia del Corpo Mail (BODY_TEXT) su tutto il blocco
+                    BODY_TEXT=$(python3 -c "
+import json, html, re, sys
+
+try:
+    att = json.loads(sys.argv[1])
+    lines = []
+    
+    for block in att.get('blocks', []):
+        if 'text' in block and isinstance(block['text'], dict):
+            lines.append(block['text'].get('text', ''))
+        if 'fields' in block:
+            for f in block['fields']:
+                lines.append(f.get('text', ''))
+
+    raw_text = '\n'.join(lines) if lines else att.get('fallback', att.get('text', ''))
+    text = html.unescape(html.unescape(raw_text))
+
+    text = text.replace('\t', '\n')
+    text = re.sub(r':(case_number|account|case_owner|product):', '', text)
+    text = text.replace(':briefcase:', '💼').replace(':building_construction:', '🏗️').replace(':bust_in_silhouette:', '👤').replace(':package:', '📦')
+    text = re.sub(r'[*~]', '', text)
+    print(text.strip())
+except Exception:
+    print('Notification Details Unavailable')
+" "$ATT")
+
+                    # 3. Estrazione Numero Caso
                     CASE_NUM=$(echo "$BODY_TEXT" | grep -oE '[0-9]{7,8}' | head -n 1)
                     [ -z "$CASE_NUM" ] && CASE_NUM="UnknownCase"
 
-                    CUSTOMER=$(echo "$BODY_TEXT" | grep -oE '(🏗️|:building_construction:)[^👤@\n]+' | sed -e 's/🏗️//g' -e 's/:building_construction://g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -n 1)
-                    [ -z "$CUSTOMER" ] && CUSTOMER=$(echo "$BODY_TEXT" | grep -oE '(BANCA[^\n|👤@]*|Robert Bosch[^\n|👤@]*|Sogei[^\n|👤@]*|GmbH|S\.p\.A\.)' | head -n 1 | sed 's/[[:space:]]*$//')
-                    [ -z "$CUSTOMER" ] && CUSTOMER="Red Hat Account"
+                    # 4. Fallback Regex se la decodifica principale torna vuota o generica
+                    if [ "$CUSTOMER" == "Red Hat Account" ]; then
+                        ALT_CUST=$(echo "$BODY_TEXT" | grep -oE '(Ministero[^\n|👤@]*|BANCA[^\n|👤@]*|Robert Bosch[^\n|👤@]*|Sogei[^\n|👤@]*|GmbH|S\.p\.A\.)' | head -n 1 | sed 's/[[:space:]]*$//')
+                        [ -n "$ALT_CUST" ] && CUSTOMER="$ALT_CUST"
+                    fi
 
+                    # 5. Estrazione Severity, Status e SBT
                     SEVERITY=$(echo "$BODY_TEXT" | grep -i 'Severity:' | sed 's/.*Severity:[[:space:]]*//I' | awk -F' ' '{print $1,$2}' | tr -d '\r')
                     [ -z "$SEVERITY" ] && SEVERITY="3 (Medium)"
 
@@ -284,6 +334,7 @@ while true; do
                     SBT=$(echo "$BODY_TEXT" | grep -i 'SBT:' | sed 's/.*SBT:[[:space:]]*//I' | tr -d '\r')
                     [ -z "$SBT" ] && SBT="N/A"
 
+                    # 6. Estrazione Link Portal & SFDC
                     PORTAL_URL=$(echo "$ATT" | jq -r '.. | .url? // empty' | grep -iE 'access.redhat.com|portal' | head -n 1)
                     SFDC_URL=$(echo "$ATT" | jq -r '.. | .url? // empty' | grep -iE 'force.com|salesforce|sfdc' | head -n 1)
 
