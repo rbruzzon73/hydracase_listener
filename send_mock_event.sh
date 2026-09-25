@@ -2,7 +2,7 @@
 
 # ==============================================================================
 #
-#  send_mock_event.sh Ver1.0 Sep 25, 2026 by rbruzzon@redhat.com
+#   send_mock_event.sh Ver2.0 Sep 25, 2026 by rbruzzon@redhat.com
 #
 # ==============================================================================
 
@@ -17,7 +17,6 @@ FF_BASE_DIR="/home/${CURRENT_USER}/.mozilla/firefox"
 FF_PROFILE_DIR=$(find "$FF_BASE_DIR" -maxdepth 1 -type d \( -name "*RedHat*" -o -name "*.default*" -o -name "*.default-release*" \) 2>/dev/null | head -n 1)
 
 FF_STORAGE_DB="${FF_PROFILE_DIR}/storage/default/https+++app.slack.com/ls/data.sqlite"
-FF_COOKIES_DB="${FF_PROFILE_DIR}/cookies.sqlite"
 
 # ==============================================================================
 # HELP & CONFIGURATION GUIDE
@@ -41,9 +40,10 @@ Scenarios:
 --------------------------------------------------------------------------------
 CONFIGURATION & SETUP GUIDE
 --------------------------------------------------------------------------------
-1. Prerequisites:
-   - Ensure 'jq', 'curl', 'sqlite3', and 'strings' are installed on your host:
-       $ sudo dnf install -y jq curl sqlite coreutils
+1. Prerequisites & Dependencies:
+   - Ensure 'jq', 'curl', 'sqlite3', and Python packages are installed:
+       $ sudo dnf install -y jq curl sqlite coreutils python3-pip
+       $ pip install browser-cookie3 --user
 
 2. Dynamic Firefox Credentials:
    - Make sure Firefox is open and logged into Red Hat Slack.
@@ -105,30 +105,40 @@ else
 fi
 
 # ==============================================================================
-# CREDENTIAL EXTRACTION HELPERS
+# CREDENTIAL EXTRACTION HELPERS (ALIGNED WITH LISTENER)
 # ==============================================================================
+sync_firefox_wal() {
+    if command -v sqlite3 &>/dev/null; then
+        sqlite3 "$FF_STORAGE_DB" "PRAGMA wal_checkpoint(FULL);" 2>/dev/null
+    fi
+}
+
 get_slack_token() {
+    sync_firefox_wal
     [ -f "$FF_STORAGE_DB" ] || return
+
     cp "$FF_STORAGE_DB"* /tmp/ 2>/dev/null
     local token
-    token=$(strings /tmp/data.sqlite 2>/dev/null | grep -o 'xoxc-[0-9a-zA-Z-]*' | head -n 1)
+    token=$(strings /tmp/data.sqlite* 2>/dev/null | grep -oE 'xoxc-[0-9a-zA-Z-]{80,}' | tail -n 1)
     rm -f /tmp/data.sqlite* 2>/dev/null
     echo "$token"
 }
 
 get_slack_cookie() {
-    [ -f "$FF_COOKIES_DB" ] || return
-    cp "$FF_COOKIES_DB"* /tmp/ 2>/dev/null
-    local cookie
-    if command -v sqlite3 &>/dev/null; then
-        cookie=$(sqlite3 /tmp/cookies.sqlite \
-            "SELECT value FROM moz_cookies WHERE host LIKE '%slack.com%' AND name='d';" 2>/dev/null)
-    fi
-    if [ -z "$cookie" ]; then
-        cookie=$(strings /tmp/cookies.sqlite 2>/dev/null | grep -oE 'xoxd-[0-9a-zA-Z%=-]+' | head -n 1)
-    fi
-    rm -f /tmp/cookies.sqlite* 2>/dev/null
-    echo "$cookie"
+    python3 -c "
+import browser_cookie3, urllib.parse
+
+try:
+    cj = browser_cookie3.firefox(domain_name='.slack.com')
+    raw_d = [c.value for c in cj if c.name == 'd'][0]
+    
+    if '+' in raw_d or '/' in raw_d:
+        print(urllib.parse.quote(raw_d))
+    else:
+        print(raw_d)
+except Exception:
+    pass
+" 2>/dev/null
 }
 
 # Extract Active Credentials
@@ -136,7 +146,7 @@ SLACK_USER_TOKEN=$(get_slack_token)
 SLACK_COOKIE_D=$(get_slack_cookie)
 
 if [ -z "$SLACK_USER_TOKEN" ] || [ -z "$SLACK_COOKIE_D" ]; then
-    echo "[-] Error: Could not extract active Slack credentials from Firefox profile: ${FF_PROFILE_DIR}"
+    echo "[-] Error: Could not extract active Slack credentials from Firefox profile via browser_cookie3."
     echo "    Ensure Firefox is running and logged into Red Hat Slack under user '${CURRENT_USER}'."
     exit 1
 fi
@@ -198,6 +208,7 @@ send_scenario() {
     else
         err=$(echo "$response" | jq -r '.error // "Unknown error"')
         echo "[-] Scenario $scenario_num failed: $err"
+        echo "    Raw Response: $response"
     fi
 }
 
