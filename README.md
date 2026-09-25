@@ -74,17 +74,18 @@ chmod +x hydracase_listener.sh send_mock_event.sh
 ```
 
 ### 2. Run the Listener Service
-To start the listener in standard foreground mode:
-
-Bash
+- To start the listener in standard foreground mode:
+```Bash
 ./hydracase_listener.sh
-To run as a continuous background daemon:
+```
 
-Bash
+- To run as a continuous background daemon:
+```Bash
 nohup ./hydracase_listener.sh > /tmp/hydracase.log 2>&1 &
+```
 
 ### 3. Test Delivery with Mock Events
-In a separate terminal window, trigger test notifications:
+- In a separate terminal window, trigger test notifications:
 
 ```Bash
 # View help and configuration guide
@@ -108,8 +109,8 @@ In a separate terminal window, trigger test notifications:
 ```
 
 ## Production Deployment Checklist
-When moving from testing to live production execution:
-- Open hydracase_listener.sh.
-- Set TEST_MODE=false.
-- Save the script and launch it as a background service or systemd user service.
+- When moving from testing to live production execution:
+   - Open hydracase_listener.sh.
+   - Set TEST_MODE=false.
+   - Save the script and launch it as a background service or systemd user service.
 
