@@ -1,6 +1,6 @@
 # HydraCaseBot Slack Email Relay
 
-Automated Bash tooling to intercept, sanitize, and forward Red Hat **HydraCaseBot** case update notifications from Slack to internal email via local SMTP relay (`smtp.corp.redhat.com`).
+Automated Bash tooling to intercept, sanitize, and forward Red Hat **HydraCaseBot** case update notifications from Slack to internal email via local SMTP relay.
 
 ---
 
