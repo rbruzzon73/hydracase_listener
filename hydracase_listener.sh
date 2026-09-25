@@ -21,7 +21,7 @@ SHOW_CREDENTIALS_DUMP=false           # Set to 'false' to hide raw TOKEN & COOKI
 # ------------------------------------------------------------------------------
 # TEST MODE CONFIGURATION (For use with send_mock_event.sh)
 # ------------------------------------------------------------------------------
-TEST_MODE=true                        # Set to 'true' to enable testing, 'false' for production
+TEST_MODE=false                       # Set to 'true' to enable testing, 'false' for production
 TEST_USER_ID="U02P7NU7T8W"            # Personal Slack User ID for test message interception
 # ------------------------------------------------------------------------------
 
