@@ -62,6 +62,7 @@ Ensure all required command-line utilities are installed on your system:
 
 ```bash
 sudo dnf install -y jq curl sqlite coreutils s-nail
+pip install browser-cookie3 --user
 ```
 - **Note: Firefox must be open and authenticated to Red Hat Slack so session tokens can be read from SQLite.**
 
