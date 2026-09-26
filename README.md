@@ -6,12 +6,30 @@ Automated Bash tooling to intercept, sanitize, and forward Red Hat **HydraCaseBo
 
 ## Features
 
-- **Automated Authentication**: Seamlessly extracts active Slack Web API session tokens (`xoxc-`) and session cookies (`d=xoxd-...`) directly from modern Firefox SQLite databases without needing fixed OAuth app tokens.
-- **Dynamic User & Profile Resolution**: Works out-of-the-box for any Linux user account (`$USER`) by dynamically discovering active Firefox profile directories (`*.default`, `RedHat.default`, `*.default-release`).
-- **Clean Subject & Body Processing**: Strips raw Slack markdown, HTML entities (`-&gt;`), raw JSON keys, and assigned user mentions (`@user`) to build clean, standardized email subjects and bodies.
-- **Multi-Card Splitting**: Unpacks Slack messages containing multiple attachment cards and forwards each notification as an individual, distinct email.
-- **Pre-Send Verification**: Executes pre-flight `auth.test` API validation before dispatching mail to ensure active session credentials.
-- **Embedded Test Harness**: Built-in mock event simulator (`send_mock_event.sh`) with an interactive menu to test full end-to-end delivery without waiting for live production traffic.
+## Features
+
+- **Automated SSO & Self-Healing Session Management**:
+  - Automatically extracts active Slack Web API session tokens (`xoxc-`) and session cookies (`d=...`) directly from Firefox LocalStorage (`data.sqlite`).
+  - Pre-flight `auth.test` verification ensures API credentials remain valid before every polling cycle.
+  - Automatically recovers missing or expired sessions via SAML SSO Kerberos negotiation (`user.js` SPNEGO enforcement).
+  - Dynamically triggers a GUI bootstrap when databases are missing, monitors `data.sqlite` creation in real-time, and seamlessly transitions back to background headless execution.
+
+- **Dynamic User & Profile Resolution**:
+  - Out-of-the-box support for any Linux user account (`$USER`) by dynamically discovering active Firefox profiles (including `default-redhat`, `RedHat.default`, `*.default-release`, and `*.default`).
+  - Directly binds to the profile directory using `--profile` and `--no-remote`, avoiding manual profile-picker prompts and conflicts with active browser instances.
+
+- **Robust Cleanup & Process Sanitization**:
+  - Automatically removes lingering Firefox lock files (`.parentlock`, `parent.lock`, `lock`) and terminates zombie instances before session refreshes and upon exit.
+  - Suppresses SQLite WAL checkpoint output (`0|-1|-1`) to keep background execution logs clean.
+
+- **Clean Parsing & Labeled Content Processing**:
+  - Automatically unescapes HTML entities, strips Slack markdown syntax, resolves user mentions (`<@U...>`), and extracts structured metadata (Case Number, Title, Severity, Status, Owner, Platform, SBT, and direct Salesforce/Portal URLs).
+
+- **Multi-Card Message Splitting**:
+  - Unpacks Slack messages containing multiple attachment blocks and forwards each alert as a distinct, individually formatted email notification.
+
+- **Embedded Test Harness**:
+  - Includes a built-in mock event generator (`send_mock_event.sh`) with an interactive CLI menu to perform end-to-end delivery testing without relying on live production alerts.
 
 ---
 
@@ -27,13 +45,21 @@ Automated Bash tooling to intercept, sanitize, and forward Red Hat **HydraCaseBo
 ## Script Descriptions
 
 ### 1. `hydracase_listener.sh`
-The primary background daemon that polls Slack for new `HydraCaseBot` notifications, converts the payload into structured metadata, and dispatches formatted emails.
+The core background daemon that polls Slack for new `HydraCaseBot` alerts, manages automated Kerberos SAML SSO session renewals, extracts structured metadata, and dispatches formatted notification emails.
 
-* **Key Variables**:
-  * `TARGET_CHANNEL_ID`: The Direct Message channel ID with `HydraCaseBot` (e.g., `D04NRQ0PNJV`).
-  * `BOT_USER_ID`: The `HydraCaseBot` Member ID (e.g., `U04JNCVBVNU`).
-  * `TEST_MODE`: When `true`, intercepts test messages sent by your personal user account (`TEST_USER_ID`) in addition to bot alerts and appends `[TEST]` to email titles.
-  * `SMTP_SERVER`: Internal relay endpoint (`smtp.corp.redhat.com:25`).
+* **Key Variables & Configuration**:
+  * `TARGET_CHANNEL_ID`: The target channel or Direct Message ID with `HydraCaseBot` (e.g., `D04NRQ0PNJV`).
+  * `BOT_USER_ID`: The official `HydraCaseBot` Member ID (e.g., `U04JNCVBVNU`).
+  * `SLACK_SAML_URL`: Direct SAML SSO bootstrap endpoint used for automatic GUI re-authentication (`https://redhat.enterprise.slack.com/sso/saml/start?...`).
+  * `SLACK_HEADLESS_URL`: Direct client URL used for background headless polling and session keep-alive (`https://app.slack.com/client/...`).
+  * `TEST_MODE`: When set to `true`, listens for mock messages sent by your personal user account (`TEST_USER_ID`) in addition to official bot alerts and appends `[TEST]` to email subject lines.
+  * `SMTP_SERVER`: Internal corporate mail relay endpoint (`smtp.corp.redhat.com:25`).
+
+* **Core Responsibilities**:
+  * **Session Resilience**: Continuously verifies `xoxc-` tokens and `d` cookies via `auth.test`. Automatically triggers an automated SAML SSO GUI bootstrap if databases are missing, or a background headless refresh if credentials expire.
+  * **Dynamic Firefox Binding**: Automatically resolves active Red Hat Enterprise profiles (prioritizing `default-redhat`) and binds directly to the filesystem path (`--profile`) without triggering profile-selection dialogs.
+  * **Process & Lock Sanitization**: Cleans up lingering `.parentlock` and `parent.lock` files, prevents database locks during SQLite reads, and terminates orphan Firefox instances on exit.
+  * **Metadata Parsing & Delivery**: Extracts structured fields (Case Number, Title, Severity, Status, Account, Owner, Platform, SBT) from complex Slack attachment blocks and sends individual, formatted HTML-decoded emails via `mailx`.
 
 ### 2. `send_mock_event.sh`
 An interactive event generator that simulates real `HydraCaseBot` Slack notifications. It posts mock payloads to the target Slack channel using your active Firefox session to validate listener parsing and email delivery.
@@ -61,7 +87,10 @@ To configure `TARGET_CHANNEL_ID` and `BOT_USER_ID`:
 Ensure all required command-line utilities are installed on your system:
 
 ```bash
-sudo dnf install -y jq curl sqlite coreutils s-nail
+# 1. System Packages (Fedora/RHEL/DNF)
+sudo dnf install -y firefox jq curl sqlite coreutils s-nail binutils python3-pip
+
+# 2. Python Packages
 pip install browser-cookie3 --user
 ```
 - **Note: Firefox must be open and authenticated to Red Hat Slack so session tokens can be read from SQLite.**
