@@ -86,6 +86,8 @@ nohup ./hydracase_listener.sh > /tmp/hydracase.log 2>&1 &
 ```
 
 ### 3. Test Delivery with Mock Events
+- Edit hydracase_listener.sh and enable the debug mode (`TEST_MODE=true`)
+- Start hydracase_listener.sh in debug mode: `./hydracase_listener.sh`
 - In a separate terminal window, trigger test notifications:
 
 ```Bash
