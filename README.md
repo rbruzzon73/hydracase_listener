@@ -4,9 +4,7 @@ Automated Bash tooling to intercept, sanitize, and forward Red Hat **HydraCaseBo
 
 ---
 
-## Features
-
-## Features
+## Features Ver 2.22
 
 - **Automated SSO & Self-Healing Session Management**:
   - Automatically extracts active Slack Web API session tokens (`xoxc-`) and session cookies (`d=...`) directly from Firefox LocalStorage (`data.sqlite`).
