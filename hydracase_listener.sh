@@ -56,6 +56,40 @@ Usage:
 
 Options:
   -h, --help        Show this help menu and setup instructions
+
+--------------------------------------------------------------------------------
+CONFIGURATION & SETUP GUIDE
+--------------------------------------------------------------------------------
+1. Prerequisites & Dependencies:
+   - Ensure 'jq', 'curl', 'sqlite3', 's-nail' (mailx), and Python packages are installed:
+       $ sudo dnf install -y jq curl sqlite coreutils s-nail xdotool python3-pip
+       $ pip install browser-cookie3 --user
+
+2. DEBUG & CREDENTIAL LOGGING CONTROL:
+   - DEBUG_MODE=true|false            : Enables or disables general execution logging.
+   - SHOW_CREDENTIALS_DUMP=true|false : Set to 'false' to hide raw TOKEN and COOKIE strings.
+   - DUMP_RAW_MESSAGES=true|false     : Set to 'true' to dump raw Slack JSON messages for debugging.
+
+3. TEST MODE CONFIGURATION:
+   - TEST_MODE=true  : Listens for BOTH HydraCaseBot AND your TEST_USER_ID.
+                       Appends '[TEST]' to email subject lines.
+   - TEST_MODE=false : Production mode. Intercepts ONLY official HydraCaseBot alerts.
+
+4. AUTOMATED RENEWAL & SELF-HEALING:
+   - Uses 'browser_cookie3' to dynamically extract the 'd' cookie with URL encoding (%2B).
+   - If session expires, 'refresh_firefox_session' reloads the Slack tab via 'xdotool' or CLI.
+
+5. DATA EXTRACTION & EMAIL FORMATTING:
+   - Automatically extracts Case Number, Title, Customer Name, Case Owner, Platform, 
+     Status, Severity, SBR, and SBT fields directly from Slack attachment blocks.
+   - Decodes HTML entities (e.g., &#39; to ') and resolves Slack user mention tags.
+
+6. Running the Service:
+   - Standard foreground execution:
+       $ ./hydracase_listener.sh
+   - Running in background:
+       $ nohup ./hydracase_listener.sh > /tmp/hydracase.log 2>&1 &
+--------------------------------------------------------------------------------
 EOF
 }
 
