@@ -2,7 +2,7 @@
 
 # ==============================================================================
 #
-# hydracase_listener.sh Ver1.0 by rbruzzon@redhat.com
+# hydracase_listener.sh Ver2.5 by rbruzzon@redhat.com
 #
 # ==============================================================================
 
