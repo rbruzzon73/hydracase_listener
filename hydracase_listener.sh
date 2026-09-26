@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
-#
-# hydracase_listener.sh ver1.0 by rbruzzon@redhat.com
-#
-# ==============================================================================
 
 # ==============================================================================
 # CONFIGURATION & CONSTANTS
@@ -27,7 +22,7 @@ DUMP_RAW_MESSAGES=true                # Set to 'true' to dump raw Slack JSON mes
 # ------------------------------------------------------------------------------
 # TEST MODE CONFIGURATION (For use with send_mock_event.sh)
 # ------------------------------------------------------------------------------
-TEST_MODE=false                        # Set to 'true' to enable testing, 'false' for production
+TEST_MODE=false                       # Set to 'true' to enable testing, 'false' for production
 TEST_USER_ID="U02P7NU7T8W"            # Personal Slack User ID for test message interception
 # ------------------------------------------------------------------------------
 
@@ -55,39 +50,9 @@ Usage:
 
 Options:
   -h, --help        Show this help menu and setup instructions
-
---------------------------------------------------------------------------------
-CONFIGURATION & SETUP GUIDE
---------------------------------------------------------------------------------
-1. Prerequisites & Dependencies:
-   - Ensure 'jq', 'curl', 'sqlite3', 's-nail' (mailx), and Python packages are installed:
-       $ sudo dnf install -y jq curl sqlite coreutils s-nail xdotool python3-pip
-       $ pip install browser-cookie3 --user
-
-2. DEBUG & CREDENTIAL LOGGING CONTROL:
-   - DEBUG_MODE=true|false            : Enables or disables general debug logging.
-   - SHOW_CREDENTIALS_DUMP=true|false : Set to 'false' to hide raw TOKEN and COOKIE.
-   - DUMP_RAW_MESSAGES=true|false     : Set to 'true' to dump raw Slack JSON messages.
-
-3. TEST MODE CONFIGURATION:
-   - TEST_MODE=true  : Listens for BOTH HydraCaseBot AND your TEST_USER_ID.
-                       Appends '[TEST]' to email subject lines.
-   - TEST_MODE=false : Production mode. Intercepts ONLY official HydraCaseBot alerts.
-
-4. AUTOMATED RENEWAL & SELF-HEALING:
-   - Uses 'browser_cookie3' to dynamically extract the 'd' cookie with %2B URL encoding.
-   - If session expires, 'refresh_firefox_session' reloads the Slack tab via 'xdotool' or CLI.
-
-5. Running the Service:
-   - Standard execution:
-       $ ./hydracase_listener.sh
-   - Running in background:
-       $ nohup ./hydracase_listener.sh > /tmp/hydracase.log 2>&1 &
---------------------------------------------------------------------------------
 EOF
 }
 
-# Check for help flags
 if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
     show_help
     exit 0
@@ -257,18 +222,32 @@ while true; do
                 for (( idx=0; idx<ATTACH_COUNT; idx++ )); do
                     ATT=$(echo "$msg" | jq -c ".attachments[$idx]")
 
-                    # 1. Estrazione del Customer avanzata via Python su TUTTO il blocco JSON (compresi i Blocks)
-                    CUSTOMER=$(python3 -c "
+                    # ----------------------------------------------------------
+                    # ESTRAZIONE PARSER AVANZATA VIA PYTHON
+                    # ----------------------------------------------------------
+                    EVAL_OUT=$(python3 -c "
 import json, html, re, sys
 
 try:
     att = json.loads(sys.argv[1])
+    
+    # 1. Estrazione Titolo dal blocco Context o dal Fallback
+    title = ''
+    for block in att.get('blocks', []):
+        if block.get('type') == 'context':
+            for elem in block.get('elements', []):
+                txt = elem.get('text', '')
+                if not txt.startswith('id:'):
+                    title = txt
+                    break
+
+    if not title and 'fallback' in att:
+        fb_match = re.search(r'Subject:\s*(.*?)(?=\n|$)', att['fallback'])
+        if fb_match:
+            title = fb_match.group(1).strip()
+
+    # 2. Decodifica testo completo dei Blocks
     full_text = ''
-    
-    # Raccoglie testo da fallback, text e array di blocks
-    if 'text' in att: full_text += att['text'] + '\n'
-    if 'fallback' in att: full_text += att['fallback'] + '\n'
-    
     for block in att.get('blocks', []):
         if 'text' in block and isinstance(block['text'], dict):
             full_text += block['text'].get('text', '') + '\n'
@@ -278,53 +257,79 @@ try:
 
     decoded = html.unescape(html.unescape(full_text))
 
-    match = re.search(r'(?::account:|:building_construction:|🏗️)\s*(.*?)\s*(?=:case_owner:|:product:|:package:|:bust_in_silhouette:|\t|\n|$)', decoded)
-    if match and match.group(1).strip():
-        print(match.group(1).strip())
-    else:
-        print('Red Hat Account')
+    # 3. Estrazione dei singoli campi
+    num_m = re.search(r':case_number:\s*([0-9]{7,8})', decoded)
+    case_num = num_m.group(1).strip() if num_m else 'UnknownCase'
+
+    cust_m = re.search(r':account:\s*(.*?)\s*(?=:case_owner:|:product:|:package:|:bust_in_silhouette:|\t|\n|$)', decoded)
+    customer = cust_m.group(1).strip() if cust_m else 'Red Hat Account'
+
+    owner_m = re.search(r':case_owner:\s*(.*?)\s*(?=:product:|:package:|\t|\n|$)', decoded)
+    case_owner = owner_m.group(1).strip() if owner_m else 'Unassigned'
+
+    # Se l'owner è una menzione ID (<@U...), estraiamo il nome dal fallback
+    if case_owner.startswith('<@') and 'fallback' in att:
+        owner_fb = re.search(r'Owner:\s*(.*?)(?=\n|$)', att['fallback'])
+        if owner_fb:
+            case_owner = owner_fb.group(1).strip()
+
+    prod_m = re.search(r':product:\s*(.*?)\s*(?=\t|\n|$)', decoded)
+    platform = prod_m.group(1).strip() if prod_m else 'Red Hat Enterprise Software'
+
+    # Output per eval Bash
+    print(f'CASE_NUM=\"{case_num}\"')
+    print(f'CUSTOMER=\"{customer}\"')
+    print(f'CASE_OWNER=\"{case_owner}\"')
+    print(f'PLATFORM=\"{platform}\"')
+    print(f'TITLE_CASE=\"{title}\"')
+
 except Exception:
-    print('Red Hat Account')
+    print('CASE_NUM=\"UnknownCase\"')
+    print('CUSTOMER=\"Red Hat Account\"')
+    print('CASE_OWNER=\"Unassigned\"')
+    print('PLATFORM=\"Red Hat Enterprise Software\"')
+    print('TITLE_CASE=\"N/A\"')
 " "$ATT")
 
-                    # 2. Formattazione e Pulizia del Corpo Mail (BODY_TEXT) su tutto il blocco
+                    # Assegna le variabili estratte da Python
+                    eval "$EVAL_OUT"
+
+                    # ----------------------------------------------------------
+                    # COSTRUZIONE DEL BODY TEXT ETICHETTATO
+                    # ----------------------------------------------------------
                     BODY_TEXT=$(python3 -c "
 import json, html, re, sys
 
 try:
     att = json.loads(sys.argv[1])
-    lines = []
     
+    extra_lines = []
     for block in att.get('blocks', []):
-        if 'text' in block and isinstance(block['text'], dict):
-            lines.append(block['text'].get('text', ''))
-        if 'fields' in block:
+        btype = block.get('type')
+        if btype == 'section' and 'text' in block:
+            t = block['text'].get('text', '')
+            if 'Status:' in t:
+                extra_lines.append(t)
+        elif 'fields' in block:
             for f in block['fields']:
-                lines.append(f.get('text', ''))
+                extra_lines.append(f.get('text', ''))
 
-    raw_text = '\n'.join(lines) if lines else att.get('fallback', att.get('text', ''))
-    text = html.unescape(html.unescape(raw_text))
+    extra_text = '\n'.join(extra_lines)
+    extra_text = html.unescape(html.unescape(extra_text))
+    extra_text = re.sub(r'[*~]', '', extra_text)
 
-    text = text.replace('\t', '\n')
-    text = re.sub(r':(case_number|account|case_owner|product):', '', text)
-    text = text.replace(':briefcase:', '💼').replace(':building_construction:', '🏗️').replace(':bust_in_silhouette:', '👤').replace(':package:', '📦')
-    text = re.sub(r'[*~]', '', text)
-    print(text.strip())
+    body = f'''Case Number: ${CASE_NUM}
+Title: ${TITLE_CASE}
+Customer Name: ${CUSTOMER}
+Case Owner: ${CASE_OWNER}
+Platform: ${PLATFORM}
+{extra_text}'''
+    print(body.strip())
 except Exception:
-    print('Notification Details Unavailable')
+    print('Details Unavailable')
 " "$ATT")
 
-                    # 3. Estrazione Numero Caso
-                    CASE_NUM=$(echo "$BODY_TEXT" | grep -oE '[0-9]{7,8}' | head -n 1)
-                    [ -z "$CASE_NUM" ] && CASE_NUM="UnknownCase"
-
-                    # 4. Fallback Regex se la decodifica principale torna vuota o generica
-                    if [ "$CUSTOMER" == "Red Hat Account" ]; then
-                        ALT_CUST=$(echo "$BODY_TEXT" | grep -oE '(Ministero[^\n|👤@]*|BANCA[^\n|👤@]*|Robert Bosch[^\n|👤@]*|Sogei[^\n|👤@]*|GmbH|S\.p\.A\.)' | head -n 1 | sed 's/[[:space:]]*$//')
-                        [ -n "$ALT_CUST" ] && CUSTOMER="$ALT_CUST"
-                    fi
-
-                    # 5. Estrazione Severity, Status e SBT
+                    # Estrazione Severity, Status e SBT per l'oggetto Email
                     SEVERITY=$(echo "$BODY_TEXT" | grep -i 'Severity:' | sed 's/.*Severity:[[:space:]]*//I' | awk -F' ' '{print $1,$2}' | tr -d '\r')
                     [ -z "$SEVERITY" ] && SEVERITY="3 (Medium)"
 
@@ -334,14 +339,15 @@ except Exception:
                     SBT=$(echo "$BODY_TEXT" | grep -i 'SBT:' | sed 's/.*SBT:[[:space:]]*//I' | tr -d '\r')
                     [ -z "$SBT" ] && SBT="N/A"
 
-                    # 6. Estrazione Link Portal & SFDC
+                    # Estrazione Link Portal & SFDC
                     PORTAL_URL=$(echo "$ATT" | jq -r '.. | .url? // empty' | grep -iE 'access.redhat.com|portal' | head -n 1)
                     SFDC_URL=$(echo "$ATT" | jq -r '.. | .url? // empty' | grep -iE 'force.com|salesforce|sfdc' | head -n 1)
 
                     [ -z "$PORTAL_URL" ] && [ "$CASE_NUM" != "UnknownCase" ] && PORTAL_URL="https://access.redhat.com/support/cases/#/case/${CASE_NUM}"
                     [ -z "$SFDC_URL" ] && SFDC_URL="https://redhat.lightning.force.com"
 
-                    EMAIL_TITLE="Severity: ${SEVERITY} - Status: ${STATUS} - SBT: ${SBT} - Case Number: ${CASE_NUM} - Customer: ${CUSTOMER}"
+                    # Intestazione Email Estesa
+                    EMAIL_TITLE="Severity: ${SEVERITY} - Status: ${STATUS} - SBT: ${SBT} - Case Number: ${CASE_NUM} - Platform: ${PLATFORM} - Customer: ${CUSTOMER}"
                     [ "$TEST_MODE" = true ] && EMAIL_TITLE="[TEST] ${EMAIL_TITLE}"
 
                     log_debug "Dispatching card $((idx+1))/$ATTACH_COUNT to $TARGET_EMAIL with Title: $EMAIL_TITLE"
